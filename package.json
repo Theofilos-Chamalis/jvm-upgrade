@@ -1,6 +1,6 @@
 {
   "name": "jvm-upgrade",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Find and apply library upgrades in Java, Kotlin and Android projects (Gradle and Maven), with changelogs.",
   "type": "module",
   "bin": {
