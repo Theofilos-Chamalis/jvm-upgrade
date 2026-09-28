@@ -72,6 +72,9 @@ export async function buildRows(deps: Dependency[], opts: BuildOptions): Promise
     groups.map(async (group) => {
       try {
         return await buildRow(group, optionsOf.get(group[0]!)!, opts);
+      } catch (e) {
+        const first = group[0]!;
+        return { name: displayName(first), deps: group, current: first.version, location: first.location, choices: [], repoOf: new Map(), errors: [(e as Error).message] };
       } finally {
         opts.progress.tick();
       }

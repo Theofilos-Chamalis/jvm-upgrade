@@ -66,7 +66,11 @@ describe('findSourceRepo', () => {
     });
     expect(
       await findSourceRepo(http, { group: 'org.gradle', artifact: 'gradle', kind: 'gradle' }, '8.10', REPO),
-    ).toEqual({ url: 'https://docs.gradle.org/8.10/release-notes.html' });
+    ).toEqual({
+      github: { owner: 'gradle', repo: 'gradle' },
+      url: 'https://docs.gradle.org/8.10/release-notes.html',
+      notesUrl: 'https://docs.gradle.org/8.10/release-notes.html',
+    });
     expect(http.calls).toEqual([]);
   });
 
@@ -215,5 +219,55 @@ describe('normalizeTag with scoped tags', () => {
     const { normalizeTag } = await import('../src/changelog.js');
     expect(normalizeTag('gradle/8.10.3', 'spotless-plugin-gradle')).toBe('8.10.3');
     expect(normalizeTag('lib/3.0.0', 'spotless-plugin-gradle')).toBe('lib/3.0.0');
+  });
+});
+
+describe('changelog fallbacks', () => {
+  const releasesUrl = (o: string, r: string) => `https://api.github.com/repos/${o}/${r}/releases?per_page=100&page=1`;
+  const release = (tag: string, prerelease = false) => ({ tag_name: tag, name: tag, body: `notes ${tag}`, prerelease });
+
+  it('links Google release notes when the POM has no source', async () => {
+    const http = fakeHttp({});
+    const gms = { group: 'com.google.android.gms', artifact: 'play-services-location', kind: 'library' as const };
+    expect(await getChangelog(http, gms, '20.0.0', '21.4.0', REPO, compare)).toEqual({
+      entries: [],
+      source: 'https://developers.google.com/android/guides/releases',
+    });
+    const firebase = { group: 'com.google.firebase', artifact: 'firebase-bom', kind: 'library' as const };
+    expect((await getChangelog(http, firebase, '33.0.0', '34.0.0', REPO, compare)).source).toBe(
+      'https://firebase.google.com/support/release-notes/android',
+    );
+  });
+
+  it('prefers a GitHub source for Google libraries that have one', async () => {
+    const pom = '<project><scm><url>https://github.com/firebase/firebase-android-sdk</url></scm></project>';
+    const dep = { group: 'com.google.firebase', artifact: 'firebase-common', kind: 'library' as const };
+    const http = fakeHttp({ [pomUrl(dep.group, dep.artifact, '2.0.0')]: ok(pom) });
+    const src = await findSourceRepo(http, dep, '2.0.0', REPO);
+    expect(src.github).toEqual({ owner: 'firebase', repo: 'firebase-android-sdk' });
+    expect(src.notesUrl).toBe('https://firebase.google.com/support/release-notes/android');
+  });
+
+  it('matches tags that drop the major version (protobuf)', async () => {
+    const pom = '<project><scm><url>https://github.com/protocolbuffers/protobuf</url></scm></project>';
+    const dep = { group: 'com.google.protobuf', artifact: 'protobuf-javalite', kind: 'library' as const };
+    const http = fakeHttp({
+      [pomUrl(dep.group, dep.artifact, '4.36.2')]: ok(pom),
+      [releasesUrl('protocolbuffers', 'protobuf')]: ok(JSON.stringify([release('v36.2'), release('v36.0-rc1', true), release('v25.9'), release('v25.8')])),
+    });
+    const log = await getChangelog(http, dep, '3.25.9', '4.36.2', REPO, compare);
+    expect(log.entries.map((e) => e.version)).toEqual(['36.2']);
+  });
+
+  it('reads Gradle notes from GitHub and matches 9.8 to v9.8.0', async () => {
+    const dep = { group: 'org.gradle', artifact: 'gradle', kind: 'gradle' as const };
+    const http = fakeHttp({
+      [releasesUrl('gradle', 'gradle')]: ok(JSON.stringify([release('v9.8.0'), release('v9.8.0-RC1', true), release('v9.7.1')])),
+    });
+    const log = await getChangelog(http, dep, '9.7.1', '9.8', undefined, compare);
+    expect(log.entries.map((e) => e.version)).toEqual(['9.8.0']);
+    expect((await getChangelog(fakeHttp({}), dep, '9.7.1', '9.8', undefined, compare)).source).toBe(
+      'https://docs.gradle.org/9.8/release-notes.html',
+    );
   });
 });

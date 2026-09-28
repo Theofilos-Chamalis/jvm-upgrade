@@ -35,7 +35,7 @@ Run jvm-upgrade -u to apply the underlined versions (target: major), or jvm-upgr
 npm install -g jvm-upgrade
 ```
 
-Or run it once with `npx jvm-upgrade`. Needs Node.js 20.12 or newer.
+Or run it once with `npx jvm-upgrade`. Needs Node.js 22.13 or newer.
 
 ## Usage
 
@@ -124,7 +124,15 @@ Dynamic versions (`1.+`, `[1.0,2.0)`, `latest.release`) are shown but never rewr
 
 ## Changelogs
 
-For each upgrade, jvm-upgrade looks for the source repository in the POM (`<scm>`, `<url>`, parent POMs), or uses the GitHub repo directly for JitPack. It then reads the GitHub releases between your version and the new one. If there are none, it reads `CHANGELOG.md` (and similar files) and cuts out the right sections. If it finds nothing, it gives you the link.
+For each upgrade, jvm-upgrade finds the source repository:
+
+- the POM's `<scm>` or `<url>`, following parent POMs and Gradle plugin markers,
+- the GitHub repo itself for JitPack (`com.github.user:repo`),
+- `gradle/gradle` for the Gradle wrapper.
+
+It then reads the GitHub releases between your version and the new one. Prereleases are skipped unless you upgrade to one. If there are no releases, it reads `CHANGELOG.md` (and similar files) and cuts out the right sections. Tags without the major version (protobuf-java `4.36.2` is tag `v36.2`) are matched too.
+
+If it finds nothing, it gives you a link: the release notes page for androidx, Google Play services, Firebase and Gradle, or the project's releases page.
 
 Set `GITHUB_TOKEN` (or `GH_TOKEN`) to avoid GitHub rate limits.
 

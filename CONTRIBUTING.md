@@ -42,3 +42,11 @@ npm run build && node dist/cli.js /path/to/project
 ## Found a notation we miss?
 
 Open an issue with a small snippet of the build file. That is the fastest way to get it supported.
+
+## Releasing
+
+1. Add a `## [x.y.z]` section at the top of `CHANGELOG.md`.
+2. Run `npm version x.y.z` (this commits and makes the `vx.y.z` tag).
+3. Run `git push --follow-tags`.
+
+The Release workflow runs the tests, publishes to npm (if that version is not there yet), and makes the GitHub release with the notes from `CHANGELOG.md`.

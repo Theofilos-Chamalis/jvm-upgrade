@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import type { Dependency, DependencyKind, Location, ScanResult } from '../types.js';
-import { isDynamic } from './gradle.js';
+import { isDynamic, type Value } from './gradle.js';
 import { dedupeRepos, MAVEN_CENTRAL } from './repos.js';
 
 interface XmlNode {
@@ -12,18 +12,12 @@ interface XmlNode {
   textEnd: number;
 }
 
-interface Value {
-  value: string;
-  loc?: Location;
-}
-
 interface Pom {
   file: string;
   code: string;
   project: XmlNode;
   groupId?: string;
   artifactId?: string;
-  version?: string;
   props: Map<string, Value>;
   parent?: XmlNode;
 }
@@ -99,7 +93,6 @@ async function loadPom(file: string): Promise<Pom | undefined> {
   const pom: Pom = { file, code, project, props: new Map(), parent: child(project, 'parent') };
   pom.artifactId = childText(pom, project, 'artifactId');
   pom.groupId = childText(pom, project, 'groupId') ?? childText(pom, pom.parent, 'groupId');
-  pom.version = childText(pom, project, 'version') ?? childText(pom, pom.parent, 'version');
   for (const prop of child(project, 'properties')?.children ?? []) {
     const value = textOf(pom, prop);
     if (value) pom.props.set(prop.name, value);
@@ -221,7 +214,7 @@ export async function scanMaven(pomFiles: string[]): Promise<ScanResult> {
         kind,
         version: version.value,
         file: pom.file,
-        repositories: kind === 'plugin' ? pluginRepos : libraryRepos,
+        repositories: kind === 'plugin' || node.parent?.parent?.name === 'plugin' ? pluginRepos : libraryRepos,
         ...(location && { location }),
       });
     }

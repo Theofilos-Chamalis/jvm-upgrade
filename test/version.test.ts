@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { compareVersions, isDynamic, isPrerelease, isSnapshot, upgradeLevel } from '../src/version.js';
+import { compareVersions, isPrerelease, isSnapshot, upgradeLevel } from '../src/version.js';
 
 const ascending = (list: string[]) => {
   for (let i = 0; i < list.length - 1; i++) {
@@ -50,6 +50,8 @@ describe('compareVersions', () => {
     ascending(['32.1.3-jre', '33.0.0-jre', '33.1.0-jre']);
     ascending(['5.2.9.RELEASE', '5.3.0.RELEASE', '5.3.1.RELEASE']);
     ascending(['1.0.0.Beta1', '1.0.0.CR1', '1.0.0.Final']);
+    ascending(['r09', 'r10']);
+    ascending(['1.0.0-M1', '1.0.0-M2', '1.0.0-RC1', '1.0.0']);
   });
 });
 
@@ -57,12 +59,13 @@ describe('isPrerelease', () => {
   it.each([
     '1.0-alpha', '1.0.0-a1', '2.0-beta', '1.0-b2', '1.0-milestone-1', '5.0.0-M1', '1.0-rc', '1.0.0.CR1',
     '2023.1-eap', '1.0-dev', '1.0-SNAPSHOT', '1.0-preview', '1.0-pre', '1.0-canary', '1.0-incubating',
-    '21-ea', '1.0-nightly', '2.0.0-Beta1', '2.0.0-RC1', '1.6.0-alpha01', '1.0.0-beta.2',
+    '21-ea', '1.0-nightly', '2.0.0-Beta1', '2.0.0-RC1', '1.6.0-alpha01', '1.0.0-beta.2', '1.0.0-M1',
+    '1.2.3-SNAPSHOT', '1.0.0-rc.1', '0.9.0-dev.12', '1.0.0-preview.3',
   ])('%s is prerelease', (v) => expect(isPrerelease(v)).toBe(true));
 
   it.each([
     '1.0.0', '1.0.0-jre', '33.0.0-android', '1.0.0.Final', '5.3.0.RELEASE', '1.0-GA', '1.0-sp1', '2.0.0',
-    '1.0.0-betamax', '3.2.1-android-1',
+    '1.0.0-betamax', '3.2.1-android-1', 'r09', '31.1-jre', '20240101',
   ])('%s is not prerelease', (v) => expect(isPrerelease(v)).toBe(false));
 });
 
@@ -73,14 +76,6 @@ describe('isSnapshot', () => {
     expect(isSnapshot('1.0')).toBe(false);
     expect(isSnapshot('1.0-rc1')).toBe(false);
   });
-});
-
-describe('isDynamic', () => {
-  it.each(['[1.0,2.0)', '(1.0,]', '[1.0]', '1.+', '+', 'latest.release', 'latest.integration', 'LATEST', 'RELEASE'])(
-    '%s is dynamic',
-    (v) => expect(isDynamic(v)).toBe(true),
-  );
-  it.each(['1.0', '5.3.0.RELEASE', '1.0-SNAPSHOT'])('%s is not dynamic', (v) => expect(isDynamic(v)).toBe(false));
 });
 
 describe('upgradeLevel', () => {

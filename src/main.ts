@@ -146,6 +146,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   if (flags['clear-cache']) await clearCache(cacheDir);
   const showProgress = flags.progress && process.stderr.isTTY;
   const log = (text: string) => process.stderr.write(`${text}\n`);
+  const say = (text: string) => (json ? process.stderr : process.stdout).write(`${text}\n`);
 
   let scan;
   try {
@@ -155,7 +156,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
   }
   for (const warning of scan.warnings) log(styleText('yellow', `warning: ${warning}`));
   if (!scan.dependencies.length) {
-    log('No Gradle or Maven dependencies found.');
+    say('No Gradle or Maven dependencies found.');
     if (json) process.stdout.write('[]\n');
     return EXIT.ok;
   }
@@ -184,6 +185,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     for (const row of rows) if (nameCount.get(row.name)! > 1) row.name += `  (${relative(root, row.deps[0]!.file)})`;
 
     const outdated = rows.filter((r) => r.choices.length);
+    const selectable = outdated.filter((r) => r.selected !== undefined);
     const failed = rows.filter((r) => !r.choices.length && r.errors.length);
     const failedAll = rows.length > 0 && failed.length === rows.length;
     const visible = flags.verbose ? rows : [...outdated, ...failed];
@@ -191,8 +193,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (json) {
       process.stdout.write(`${JSON.stringify(toJson(visible, root), null, 2)}\n`);
     } else if (!flags.interactive) {
-      if (visible.length) log(renderTable(visible, root));
-      if (!outdated.length) log(styleText('green', `All ${rows.length - failed.length} dependencies are up to date.`));
+      if (visible.length) say(renderTable(visible, root));
+      if (!outdated.length) say(styleText('green', `All ${rows.length - failed.length} dependencies are up to date.`));
     }
     if (failedAll) return EXIT.network;
     if (!outdated.length) return EXIT.ok;
@@ -201,7 +203,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     if (flags.interactive) {
       const picked = await (await import('./tui.js')).pick(outdated, (row, choice) => loadChangelog(http, row, choice));
       if (!picked) {
-        log('Cancelled. Nothing was changed.');
+        say('Cancelled. Nothing was changed.');
         return EXIT.ok;
       }
       chosen = picked;
@@ -218,7 +220,7 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
     const writable = [...chosen].filter(([row]) => row.location);
     if (flags.upgrade || flags.interactive) {
       if (!writable.length) {
-        log('Nothing to upgrade.');
+        say('Nothing to upgrade.');
         return EXIT.ok;
       }
       const edits: Edit[] = writable.map(([row, choice]) => ({ location: row.location!, from: row.current, to: choice.version }));
@@ -228,16 +230,16 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
         if (e instanceof EditConflictError) fail(EXIT.conflict, e.message);
         throw e;
       }
-      for (const [row, choice] of writable) log(`${styleText('green', '✔')} ${row.name} ${row.current} → ${choice.version}`);
-      log(styleText('gray', 'Build files updated. Run your build and tests to check the upgrades.'));
+      for (const [row, choice] of writable) say(`${styleText('green', '✔')} ${row.name} ${row.current} → ${choice.version}`);
+      say(styleText('gray', 'Build files updated. Run your build and tests to check the upgrades.'));
       return EXIT.ok;
     }
 
     if (!json) {
       const target = rootOptions.target;
-      log(styleText('gray', `\nRun ${styleText('cyan', 'jvm-upgrade -u')} to apply the underlined versions (target: ${target}), or ${styleText('cyan', 'jvm-upgrade -i')} to pick.`));
+      say(styleText('gray', `\nRun ${styleText('cyan', 'jvm-upgrade -u')} to apply the underlined versions (target: ${target}), or ${styleText('cyan', 'jvm-upgrade -i')} to pick.`));
     }
-    return flags['error-on-outdated'] ? EXIT.outdated : EXIT.ok;
+    return flags['error-on-outdated'] && selectable.length ? EXIT.outdated : EXIT.ok;
   } finally {
     await http.close();
   }

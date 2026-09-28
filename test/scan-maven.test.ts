@@ -1,7 +1,9 @@
 import { readFileSync } from 'node:fs';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import { scanProject } from '../src/scan/index.js';
 import { JITPACK, MAVEN_CENTRAL } from '../src/scan/repos.js';
 import type { Dependency, ScanResult } from '../src/types.js';
@@ -107,5 +109,57 @@ describe('multi module maven project', () => {
     expect(artifacts).not.toContain('parent');
     expect(artifacts).not.toContain('y');
     expect(multi.dependencies).toHaveLength(5);
+  });
+});
+
+const tempRoots: string[] = [];
+afterAll(() => Promise.all(tempRoots.map((r) => rm(r, { recursive: true, force: true }))));
+
+async function scanPom(content: string): Promise<ScanResult> {
+  const root = await mkdtemp(join(tmpdir(), 'jvm-upgrade-'));
+  tempRoots.push(root);
+  await writeFile(join(root, 'pom.xml'), content);
+  return scanProject(root);
+}
+
+describe('maven regressions', () => {
+  it('keeps offsets correct with CRLF line endings', async () => {
+    const pom = [
+      '<?xml version="1.0"?>',
+      '<project>',
+      '  <!-- comment -->',
+      '  <groupId>com.example</groupId><artifactId>app</artifactId><version>1</version>',
+      '  <properties>',
+      '    <guava.version>',
+      '      33.2.1-jre',
+      '    </guava.version>',
+      '  </properties>',
+      '  <dependencies>',
+      '    <dependency><groupId>com.google.guava</groupId><artifactId>guava</artifactId><version>${guava.version}</version></dependency>',
+      '    <dependency>',
+      '      <groupId>junit</groupId>',
+      '      <artifactId>junit</artifactId>',
+      '      <version>4.13.2</version>',
+      '    </dependency>',
+      '  </dependencies>',
+      '</project>',
+      '',
+    ].join('\r\n');
+    const result = await scanPom(pom);
+    expect(result.dependencies.filter((d) => d.location)).toHaveLength(2);
+    expectLocationsMatch(result);
+  });
+
+  it('queries plugin repositories for plugin dependencies', async () => {
+    const result = await scanPom(`<project>
+  <repositories><repository><url>https://libs.example.com/</url></repository></repositories>
+  <pluginRepositories><pluginRepository><url>https://plugins.example.com/</url></pluginRepository></pluginRepositories>
+  <build><plugins><plugin>
+    <artifactId>maven-shade-plugin</artifactId><version>3.6.0</version>
+    <dependencies><dependency><groupId>org.ow2.asm</groupId><artifactId>asm</artifactId><version>9.7</version></dependency></dependencies>
+  </plugin></plugins></build>
+</project>`);
+    const asm = find(result, 'org.ow2.asm', 'asm');
+    expect(asm).toMatchObject({ kind: 'library', repositories: ['https://plugins.example.com/', MAVEN_CENTRAL] });
   });
 });

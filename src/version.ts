@@ -50,11 +50,6 @@ export function isPrerelease(v: string): boolean {
   return tokenize(v).some((t) => PRERELEASE.has(t));
 }
 
-export function isDynamic(v: string): boolean {
-  const s = v.trim();
-  return /^[[(]/.test(s) || /[\])]$/.test(s) || s.endsWith('+') || /^latest\./i.test(s) || /^(LATEST|RELEASE)$/.test(s);
-}
-
 export function upgradeLevel(from: string, to: string): Target | undefined {
   if (compareVersions(to, from) <= 0) return undefined;
   const f = tokenize(from);

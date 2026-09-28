@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { readFile, rename, rm, stat, writeFile } from 'node:fs/promises';
+import { readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises';
 import type { Location } from './types.js';
 
 export interface Edit {
@@ -50,7 +50,8 @@ function rewrite(file: string, content: string, edits: Edit[]): string {
   return out;
 }
 
-async function writeAtomic(file: string, content: string): Promise<void> {
+async function writeAtomic(path: string, content: string): Promise<void> {
+  const file = await realpath(path);
   const tmp = `${file}.${randomBytes(4).toString('hex')}.tmp`;
   const { mode } = await stat(file);
   try {

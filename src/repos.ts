@@ -61,9 +61,11 @@ function loadGradle(http: Http): Promise<Map<string, string>> {
   return p;
 }
 
-async function fetchGithubTags(http: Http, owner: string, repo: string): Promise<string[] | undefined> {
-  const res = await http.get(`https://api.github.com/repos/${owner}/${repo}/tags?per_page=100`);
-  if (res.status !== 200) return undefined;
+async function fetchGithubTags(http: Http, owner: string, repo: string): Promise<string[]> {
+  const url = `https://api.github.com/repos/${owner}/${repo}/tags?per_page=100`;
+  const res = await http.get(url);
+  if (res.status === 404) return [];
+  if (res.status !== 200) throw new Error(`${url}: HTTP ${res.status}`);
   const tags = JSON.parse(res.body) as { name: string }[];
   return tags.map((t) => t.name.replace(/^v(?=\d)/i, ''));
 }
@@ -71,11 +73,16 @@ async function fetchGithubTags(http: Http, owner: string, repo: string): Promise
 async function versionsFromRepo(http: Http, dep: DepRef, repo: string): Promise<string[]> {
   const url = `${repo}${artifactPath(dep.group, dep.artifact)}/maven-metadata.xml`;
   const res = await http.get(url);
-  if (res.status === 200) return parseMetadata(res.body);
+  if (res.status === 200) {
+    // Some proxies answer 200 with an HTML page instead of 404 or 401.
+    if (!res.body.includes('<metadata')) throw new Error(`${url}: not a maven-metadata.xml response`);
+    return parseMetadata(res.body);
+  }
   if (res.status === 404) {
-    const owner = dep.group.startsWith('com.github.') ? dep.group.split('.')[2] : undefined;
-    if (repo.includes('jitpack.io') && owner) {
-      return (await fetchGithubTags(http, owner, dep.artifact)) ?? [];
+    // JitPack: com.github.Owner:Repo, or com.github.Owner.Repo:Module for multi-module builds.
+    const [, , owner, ghRepo = dep.artifact] = dep.group.split('.');
+    if (repo.includes('jitpack.io') && dep.group.startsWith('com.github.') && owner) {
+      return fetchGithubTags(http, owner, ghRepo);
     }
     return [];
   }

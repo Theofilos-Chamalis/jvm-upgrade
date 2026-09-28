@@ -11,11 +11,10 @@ export interface GradleBuild {
 
 interface Source {
   file: string;
-  content: string;
   code: string;
 }
 
-interface Value {
+export interface Value {
   value: string;
   loc?: Location;
 }
@@ -39,10 +38,12 @@ interface Context {
   out: Dependency[];
 }
 
-const COORD_RE = /(["'])([\w.\-]+):([\w.\-]+):([^"'\s@:]+)(?::[\w.\-]+)?(?:@\w+)?\1/dg;
+const COORD_RE = /(["'])([A-Za-z][\w.\-]*):([\w.\-]+):((?:\$\{[^}\n]*\}|[\w.\-+!$\[\](),])+)(?::[\w.\-]+)?(?:@\w+)?\1/dg;
+// Rejects look-alikes such as "jdbc:h2:mem:test".
+const VERSIONISH_RE = /\d|\$|^\+$|^latest\.|SNAPSHOT/;
 const MAP_RE =
   /\bgroup\s*[:=]\s*(["'])([^"']+)\1\s*,\s*name\s*[:=]\s*(["'])([^"']+)\3\s*,\s*version\s*[:=]\s*(?:(["'])([^"']*)\5|([A-Za-z_][\w.]*))/dg;
-const KOTLIN_DEP_RE = /\bkotlin\s*\(\s*"([\w\-]+)"\s*,\s*(?:version\s*=\s*)?"([^"]*)"\s*\)/dg;
+const KOTLIN_DEP_RE = /\bkotlin\s*\(\s*"([\w\-]+)"\s*,\s*(?:version\s*=\s*)?(?:"([^"]*)"|([A-Za-z_][\w.]*))\s*\)/dg;
 const PLUGIN_RE =
   /\b(id|kotlin)\s*\(?\s*(["'])([\w.\-]+)\2\s*\)?\s*\.?\s*version\s*\(?\s*(?:(["'])([^"']*)\4|([A-Za-z_][\w.]*(?:\(\))?))/dg;
 const REPO_RE =
@@ -59,6 +60,8 @@ const EXT_BLOCK_RES = [
   /(?<![\w.])(\w+)\s*=\s*(["'])([^"'$\n]*)\2/dg,
   /\bset\s*\(\s*["'](\w+)["']\s*,\s*(["'])([^"'$\n]*)\2/dg,
 ];
+const MAP_VAR_RE = /(?<![\w.])(?:ext\.)?(\w+)\s*=\s*\[/g;
+const MAP_ENTRY_RE = /(?<![\w.])(\w+)\s*:\s*(["'])([^"'$\n]*)\2/dg;
 const PROPERTY_RE = /^[ \t]*([\w.\-]+)[ \t]*[=:][ \t]*(.*?)[ \t]*\r?$/dgm;
 const WRAPPER_RE = /distributionUrl\s*[=:].*?gradle-([\w.\-]+?)-(?:bin|all)\.zip/d;
 
@@ -124,8 +127,7 @@ export function stripProperties(src: string): string {
 
 async function readSource(file: string, strip: (s: string) => string): Promise<Source | undefined> {
   try {
-    const content = await readFile(file, 'utf8');
-    return { file, content, code: strip(content) };
+    return { file, code: strip(await readFile(file, 'utf8')) };
   } catch {
     return undefined;
   }
@@ -135,15 +137,17 @@ function findBlocks(code: string, name: string): Span[] {
   const re = new RegExp(`\\b${name}\\s*(?:\\([^()]*\\))?\\s*\\{`, 'g');
   return [...code.matchAll(re)].map((m) => {
     const open = m.index + m[0].length - 1;
-    return { start: open + 1, end: matchBrace(code, open) };
+    return { start: open + 1, end: matchClose(code, open) };
   });
 }
 
-function matchBrace(code: string, open: number): number {
+function matchClose(code: string, open: number): number {
+  const opener = code[open];
+  const closer = opener === '[' ? ']' : '}';
   let depth = 0;
   for (let i = open; i < code.length; i++) {
-    if (code[i] === '{') depth++;
-    else if (code[i] === '}' && --depth === 0) return i;
+    if (code[i] === opener) depth++;
+    else if (code[i] === closer && --depth === 0) return i;
   }
   return code.length;
 }
@@ -189,6 +193,13 @@ function collectVars(src: Source): Vars {
     ...VAR_RES.flatMap((re) => matchesIn(src.code, re)),
   ].sort((a, b) => a.index - b.index);
   for (const m of matches) vars.set(m[1]!, { value: m[3]!, loc: locOf(src, m, 3) });
+  for (const m of src.code.matchAll(MAP_VAR_RE)) {
+    const open = m.index + m[0].length - 1;
+    for (const e of src.code.slice(open, matchClose(src.code, open)).matchAll(MAP_ENTRY_RE)) {
+      const [start, end] = e.indices![3]!;
+      vars.set(`${m[1]}.${e[1]}`, { value: e[3]!, loc: { file: src.file, start: open + start, end: open + end } });
+    }
+  }
   return vars;
 }
 
@@ -209,8 +220,8 @@ function lookup(scope: Scope, expr: string): Value | undefined {
   const catalog = /^(\w+)\.versions\.([\w.]+)$/.exec(e);
   if (catalog) return scope.catalogs.get(catalog[1]!)?.get(normKey(catalog[2]!));
   const key =
-    /(?:extra|properties)\s*\[\s*["']([\w.\-]+)["']\s*\]$/.exec(e)?.[1] ??
-    /property\s*\(\s*["']([\w.\-]+)["']\s*\)$/.exec(e)?.[1] ??
+    /(?:ext|extra|properties)\s*\[\s*["']([\w.\-]+)["']\s*\]$/.exec(e)?.[1] ??
+    /(?:findProperty|property)\s*\(\s*["']([\w.\-]+)["']\s*\)$/.exec(e)?.[1] ??
     e.replace(/^(?:(?:rootProject|project|ext|extra|properties)\.)+/, '');
   for (const vars of scope.vars) {
     const value = vars.get(key);
@@ -268,27 +279,35 @@ function addResolved(
   ctx.out.push(makeDep(kind, group, artifact, version, src.file, ctx.repositories));
 }
 
+/** Adds a match whose version is either a quoted literal in group `literal` or a bare reference in `literal + 1`. */
+function addLiteralOrRef(
+  ctx: Context,
+  src: Source,
+  kind: DependencyKind,
+  group: string,
+  artifact: string,
+  m: RegExpExecArray,
+  literal: number,
+): void {
+  if (m[literal] !== undefined) addResolved(ctx, src, kind, group, artifact, m[literal], locOf(src, m, literal));
+  else addResolved(ctx, src, kind, group, artifact, `\${${m[literal + 1]}}`);
+}
+
 function libraryDeps(src: Source, ctx: Context): void {
   for (const m of src.code.matchAll(COORD_RE)) {
-    addResolved(ctx, src, 'library', m[2]!, m[3]!, m[4]!, locOf(src, m, 4));
+    if (VERSIONISH_RE.test(m[4]!)) addResolved(ctx, src, 'library', m[2]!, m[3]!, m[4]!, locOf(src, m, 4));
   }
-  for (const m of src.code.matchAll(MAP_RE)) {
-    if (m[6] !== undefined) addResolved(ctx, src, 'library', m[2]!, m[4]!, m[6], locOf(src, m, 6));
-    else addResolved(ctx, src, 'library', m[2]!, m[4]!, `\${${m[7]}}`);
-  }
+  for (const m of src.code.matchAll(MAP_RE)) addLiteralOrRef(ctx, src, 'library', m[2]!, m[4]!, m, 6);
   const plugins = findBlocks(src.code, 'plugins');
   for (const m of src.code.matchAll(KOTLIN_DEP_RE)) {
-    if (!within(m.index, plugins)) {
-      addResolved(ctx, src, 'library', 'org.jetbrains.kotlin', `kotlin-${m[1]}`, m[2]!, locOf(src, m, 2));
-    }
+    if (!within(m.index, plugins)) addLiteralOrRef(ctx, src, 'library', 'org.jetbrains.kotlin', `kotlin-${m[1]}`, m, 2);
   }
 }
 
 function pluginDeps(src: Source, ctx: Context): void {
   for (const m of matchesIn(src.code, PLUGIN_RE, findBlocks(src.code, 'plugins'))) {
     const id = m[1] === 'kotlin' ? `org.jetbrains.kotlin.${m[3]}` : m[3]!;
-    if (m[5] !== undefined) addResolved(ctx, src, 'plugin', id, `${id}.gradle.plugin`, m[5], locOf(src, m, 5));
-    else addResolved(ctx, src, 'plugin', id, `${id}.gradle.plugin`, `\${${m[6]}}`);
+    addLiteralOrRef(ctx, src, 'plugin', id, `${id}.gradle.plugin`, m, 5);
   }
 }
 
@@ -361,6 +380,7 @@ export function parseToml(code: string): TomlEntry[] {
     if (i >= code.length) break;
     if (code[i] === '[') {
       const end = code.indexOf(']', i);
+      if (end < 0) break;
       table = code.slice(i + 1, end).trim();
       i = end + 1;
       skipLine();
@@ -414,11 +434,10 @@ function pickVersion(src: Source, fields: Map<string, TomlString>, path: string)
   return best && tomlValue(src, best);
 }
 
-function splitNotation(src: Source, s: TomlString): { parts: string[]; version?: Value } {
+function splitNotation(src: Source, s: TomlString): { parts: string[]; version: Value } {
   const parts = s.value.split(':');
   const last = parts[parts.length - 1]!;
-  const start = s.end - last.length;
-  return { parts, version: tomlValue(src, { value: last, start, end: s.end }) };
+  return { parts, version: tomlValue(src, { value: last, start: s.end - last.length, end: s.end }) };
 }
 
 function parseCatalog(
@@ -445,7 +464,7 @@ function parseCatalog(
     const str = e.fields.get('');
     if (str) {
       const { parts, version } = splitNotation(src, str);
-      if (parts.length >= 3 && version) deps.push(makeDep('library', parts[0]!, parts[1]!, version, src.file, libraryRepos));
+      if (parts.length >= 3) deps.push(makeDep('library', parts[0]!, parts[1]!, version, src.file, libraryRepos));
       continue;
     }
     const [group, artifact] = e.fields.get('module')?.value.split(':') ?? [e.fields.get('group')?.value, e.fields.get('name')?.value];
@@ -504,12 +523,18 @@ export async function scanGradle(build: GradleBuild): Promise<ScanResult> {
     pluginDeps(settings, { scope, repositories: pluginRepos, warnings, out });
   }
 
-  for (const file of build.buildFiles) {
-    const src = file === rootBuildFile ? rootBuild : await readSource(file, stripCode);
+  const modules = await Promise.all(
+    build.buildFiles.map(async (file) => {
+      const dir = dirname(file);
+      const [src, props] = await Promise.all([
+        file === rootBuildFile ? rootBuild : readSource(file, stripCode),
+        dir === build.root ? undefined : readSource(join(dir, 'gradle.properties'), stripProperties),
+      ]);
+      return { src, moduleProps: propertyVars(props) };
+    }),
+  );
+  for (const { src, moduleProps } of modules) {
     if (!src) continue;
-    const dir = dirname(file);
-    const moduleProps =
-      dir === build.root ? new Map<string, Value>() : propertyVars(await readSource(join(dir, 'gradle.properties'), stripProperties));
     const scope = { vars: [collectVars(src), rootVars, moduleProps, rootProps], catalogs };
     libraryDeps(src, { scope, repositories: libraryRepos(buildFileRepos(src)), warnings, out });
     pluginDeps(src, { scope, repositories: pluginRepos, warnings, out });

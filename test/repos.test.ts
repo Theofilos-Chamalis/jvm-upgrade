@@ -68,6 +68,39 @@ describe('fetchVersions', () => {
     expect(r.repoOf.get('1.2.0')).toBe('https://jitpack.io/');
   });
 
+  it('reports an HTML 200 page as an error, not as zero versions', async () => {
+    const http = fakeHttp({ [`${A}${path}`]: ok('<!doctype html><html><body>Sign in</body></html>') });
+    const r = await fetchVersions(http, { ...dep, repositories: [A] });
+    expect(r.versions).toEqual([]);
+    expect(r.errors[0]).toContain('not a maven-metadata.xml');
+  });
+
+  it('uses the repo segment of a multi-module jitpack group', async () => {
+    const http = fakeHttp({
+      'https://api.github.com/repos/user/proj/tags?per_page=100': ok(JSON.stringify([{ name: 'v2.0' }])),
+    });
+    const r = await fetchVersions(http, {
+      group: 'com.github.user.proj',
+      artifact: 'module',
+      kind: 'library',
+      repositories: ['https://jitpack.io/'],
+    });
+    expect(r.versions).toEqual(['2.0']);
+  });
+
+  it('reports GitHub tag lookup failures such as rate limits', async () => {
+    const http = fakeHttp({
+      'https://api.github.com/repos/user/proj/tags?per_page=100': { status: 403, headers: {}, body: '' },
+    });
+    const r = await fetchVersions(http, {
+      group: 'com.github.user',
+      artifact: 'proj',
+      kind: 'library',
+      repositories: ['https://jitpack.io/'],
+    });
+    expect(r.errors[0]).toContain('403');
+  });
+
   it('lists gradle wrapper versions without snapshots, nightlies or broken builds', async () => {
     const list = [
       { version: '8.10', buildTime: '20240814110745+0000' },

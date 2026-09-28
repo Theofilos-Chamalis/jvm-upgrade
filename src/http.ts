@@ -40,7 +40,7 @@ export async function clearCache(dir: string): Promise<void> {
 
 export function authHeader(url: string, credentials: Credential[]): string | undefined {
   const match = credentials
-    .filter((c) => url.startsWith(c.url) && sameOrigin(url, c.url))
+    .filter((c) => underPrefix(url, c.url) && sameOrigin(url, c.url))
     .sort((a, b) => b.url.length - a.url.length)[0];
   if (match?.token) return `Bearer ${match.token}`;
   if (match?.username !== undefined && match.password !== undefined) {
@@ -49,6 +49,11 @@ export function authHeader(url: string, credentials: Credential[]): string | und
   const gh = process.env.GITHUB_TOKEN || process.env.GH_TOKEN;
   if (gh && hostOf(url) === 'api.github.com') return `Bearer ${gh}`;
   return undefined;
+}
+
+function underPrefix(url: string, prefix: string): boolean {
+  const base = prefix.endsWith('/') ? prefix : `${prefix}/`;
+  return url === prefix || url.startsWith(base);
 }
 
 function hostOf(url: string): string | undefined {
@@ -83,10 +88,12 @@ function limiter(max: number) {
   };
 }
 
-async function readLocal(url: string): Promise<HttpResponse> {
+async function readLocal(url: string, method: 'GET' | 'HEAD'): Promise<HttpResponse> {
   try {
-    const body = await readFile(fileURLToPath(url), 'utf8');
-    return { status: 200, headers: {}, body };
+    const path = fileURLToPath(url);
+    const { mtime } = await stat(path);
+    const body = method === 'HEAD' ? '' : await readFile(path, 'utf8');
+    return { status: 200, headers: { 'last-modified': mtime.toUTCString() }, body };
   } catch {
     return { status: 404, headers: {}, body: '' };
   }
@@ -102,6 +109,8 @@ async function atomicWrite(file: string, data: string): Promise<void> {
     throw err;
   }
 }
+
+const cacheable = (res: HttpResponse) => res.status === 200 || res.status === 404;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -121,10 +130,11 @@ export function createHttp(opts: HttpOptions): Http & { close(): Promise<void> }
     const file = cacheFile(url);
     try {
       const entry = JSON.parse(await readFile(file, 'utf8')) as CacheEntry;
-      if (Date.now() - entry.time <= ttl) {
-        return { status: entry.status, headers: entry.headers, body: entry.body };
+      const age = Date.now() - entry.time;
+      // Stale entries are not deleted here: that races fresh writes from other processes.
+      if (age >= 0 && age <= ttl && typeof entry.status === 'number' && typeof entry.body === 'string') {
+        return { status: entry.status, headers: entry.headers ?? {}, body: entry.body };
       }
-      await rm(file, { force: true });
     } catch {
       // missing or corrupt entry
     }
@@ -132,7 +142,7 @@ export function createHttp(opts: HttpOptions): Http & { close(): Promise<void> }
   }
 
   async function writeCache(url: string, res: HttpResponse): Promise<void> {
-    if (!cacheDir || (res.status !== 200 && res.status !== 404)) return;
+    if (!cacheDir || !cacheable(res)) return;
     try {
       dirReady ??= mkdir(cacheDir, { recursive: true });
       await dirReady;
@@ -160,6 +170,7 @@ export function createHttp(opts: HttpOptions): Http & { close(): Promise<void> }
         current = new URL(location, current).toString();
         continue;
       }
+      if (method === 'HEAD') await res.body?.cancel();
       return {
         status: res.status,
         headers: Object.fromEntries(res.headers),
@@ -188,7 +199,7 @@ export function createHttp(opts: HttpOptions): Http & { close(): Promise<void> }
   }
 
   async function get(url: string): Promise<HttpResponse> {
-    if (url.startsWith('file:')) return readLocal(url);
+    if (url.startsWith('file:')) return readLocal(url, 'GET');
     const authed = authHeader(url, opts.credentials) !== undefined;
     const cached = authed ? undefined : await readCache(url);
     if (cached) return cached;
@@ -203,12 +214,13 @@ export function createHttp(opts: HttpOptions): Http & { close(): Promise<void> }
       if (!p) {
         p = get(url);
         inflight.set(url, p);
-        p.catch(() => inflight.delete(url));
+        // Keep good answers for the whole run; let errors and 5xx/429 be retried later.
+        p.then((res) => cacheable(res) || inflight.delete(url), () => inflight.delete(url));
       }
       return p;
     },
     async head(url) {
-      if (url.startsWith('file:')) return readLocal(url);
+      if (url.startsWith('file:')) return readLocal(url, 'HEAD');
       return network('HEAD', url);
     },
     async close() {

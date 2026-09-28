@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { mkdtemp, readdir, readFile, rm, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, utimes, writeFile, mkdir } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,6 +53,12 @@ describe('authHeader', () => {
   it('does not match other origins with a shared string prefix', () => {
     expect(authHeader('https://repo.example.com.evil.io/x', creds)).toBeUndefined();
     expect(authHeader('https://other.example.com/x', creds)).toBeUndefined();
+  });
+
+  it('matches credential urls on path boundaries', () => {
+    const noSlash = [{ url: 'https://repo.example.com/maven', token: 'tok' }];
+    expect(authHeader('https://repo.example.com/maven/a.xml', noSlash)).toBe('Bearer tok');
+    expect(authHeader('https://repo.example.com/maven-other/a.xml', noSlash)).toBeUndefined();
   });
 
   it('uses GITHUB_TOKEN only for api.github.com', () => {
@@ -116,6 +122,57 @@ describe('createHttp', () => {
     const res = await createHttp({ credentials: [], concurrency: 1 }).get(url);
     expect(res.status).toBe(200);
     expect(hits).toBe(2);
+  });
+
+  it('does not memoize 5xx responses for later GETs', async () => {
+    let hits = 0;
+    const url = await start((_req, res) => {
+      hits++;
+      res.statusCode = hits <= 2 ? 503 : 200;
+      res.end('ok');
+    });
+    const http = createHttp({ credentials: [], concurrency: 1 });
+    expect((await http.get(url)).status).toBe(503);
+    expect((await http.get(url)).status).toBe(200);
+  });
+
+  it('memoizes 200 responses for the whole run', async () => {
+    let hits = 0;
+    const url = await start((_req, res) => {
+      hits++;
+      res.end('ok');
+    });
+    const http = createHttp({ credentials: [], concurrency: 1 });
+    await http.get(url);
+    await http.get(url);
+    expect(hits).toBe(1);
+  });
+
+  it('answers HEAD on file:// urls with Last-Modified and no body', async () => {
+    const file = join(dir, 'a.pom');
+    await writeFile(file, '<project/>');
+    const when = new Date('2020-01-02T03:04:05Z');
+    await utimes(file, when, when);
+    const res = await createHttp({ credentials: [], concurrency: 1 }).head(pathToFileURL(file).href);
+    expect(res.status).toBe(200);
+    expect(res.body).toBe('');
+    expect(new Date(res.headers['last-modified']!)).toEqual(when);
+  });
+
+  it('treats a corrupt or future-dated cache entry as a miss', async () => {
+    let hits = 0;
+    const url = await start((_req, res) => {
+      hits++;
+      res.end('fresh');
+    });
+    const cacheDir = join(dir, 'cache');
+    await mkdir(cacheDir);
+    await writeFile(join(cacheDir, cacheName(`${url}a`)), JSON.stringify({ time: Date.now() }));
+    await writeFile(join(cacheDir, cacheName(`${url}b`)), JSON.stringify({ status: 200, headers: {}, body: 'old', time: Date.now() + 1e9 }));
+    await writeFile(join(cacheDir, cacheName(`${url}c`)), '{not json');
+    const http = createHttp({ credentials: [], concurrency: 1, cacheDir });
+    for (const p of ['a', 'b', 'c']) expect((await http.get(`${url}${p}`)).body).toBe('fresh');
+    expect(hits).toBe(3);
   });
 
   it('reads file:// urls and returns 404 when missing', async () => {

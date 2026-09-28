@@ -1,4 +1,5 @@
 import { fetchPom } from './repos.js';
+import { isPrerelease } from './version.js';
 import type { Changelog, ChangelogEntry, Dependency, Http } from './types.js';
 
 type DepRef = Pick<Dependency, 'group' | 'artifact' | 'kind'>;
@@ -12,6 +13,8 @@ export interface GithubRepo {
 export interface SourceRepo {
   github?: GithubRepo;
   url?: string;
+  /** Shown when no notes are found in the repo itself. */
+  notesUrl?: string;
 }
 
 interface Release {
@@ -21,11 +24,17 @@ interface Release {
   html_url?: string;
   published_at?: string | null;
   draft?: boolean;
+  prerelease?: boolean;
 }
 
 const CHANGELOG_FILES = ['CHANGELOG.md', 'CHANGES.md', 'HISTORY.md', 'RELEASE_NOTES.md', 'docs/CHANGELOG.md'];
 const MAX_RELEASE_PAGES = 5;
 const MAX_PARENT_DEPTH = 3;
+const GOOGLE_NOTES: [prefix: string, url: string][] = [
+  ['com.google.android.gms', 'https://developers.google.com/android/guides/releases'],
+  ['com.google.gms', 'https://developers.google.com/android/guides/releases'],
+  ['com.google.firebase', 'https://firebase.google.com/support/release-notes/android'],
+];
 const POM_NOISE =
   /<(parent|scm|licenses|developers|contributors|organization|distributionManagement|issueManagement|ciManagement|mailingLists|repositories|pluginRepositories|build|reporting|profiles|dependencies|dependencyManagement)\b[\s\S]*?<\/\1>/g;
 
@@ -82,8 +91,22 @@ export function androidxReleasesUrl(group: string): string | undefined {
   return `https://developer.android.com/jetpack/androidx/releases/${name}`;
 }
 
+function googleNotesUrl(group: string): string | undefined {
+  return GOOGLE_NOTES.find(([prefix]) => group === prefix || group.startsWith(`${prefix}.`))?.[1];
+}
+
 export async function findSourceRepo(http: Http, dep: DepRef, version: string, repo?: string): Promise<SourceRepo> {
-  if (dep.kind === 'gradle') return { url: `https://docs.gradle.org/${version}/release-notes.html` };
+  if (dep.kind === 'gradle') {
+    const notesUrl = `https://docs.gradle.org/${version}/release-notes.html`;
+    return { github: { owner: 'gradle', repo: 'gradle' }, url: notesUrl, notesUrl };
+  }
+  const fromPom = await sourceFromPom(http, dep, version, repo);
+  const notesUrl = googleNotesUrl(dep.group);
+  if (notesUrl) return { ...fromPom, url: fromPom.url ?? notesUrl, notesUrl };
+  return fromPom;
+}
+
+async function sourceFromPom(http: Http, dep: DepRef, version: string, repo?: string): Promise<SourceRepo> {
   const [root, , owner] = dep.group.split('.');
   if (dep.group.startsWith('com.github.') && owner) {
     return { github: { owner, repo: dep.artifact }, url: `https://github.com/${owner}/${dep.artifact}` };
@@ -138,8 +161,18 @@ export function normalizeTag(tag: string, artifact: string): string {
 
 const isVersionLike = (v: string) => /^\d+(\.\d+)*([-.+_][0-9A-Za-z.+_-]*)?$/.test(v);
 
+const trimZeros = (v: string) => v.replace(/(\.0)+(?=$|-)/, '');
+
+/** Trailing ".0" parts are ignored so a "v9.8.0" tag matches version "9.8". */
 function inRange(v: string, from: string, to: string, compare: Compare): boolean {
-  return compare(v, from) > 0 && compare(v, to) <= 0;
+  const x = trimZeros(v);
+  return compare(x, trimZeros(from)) > 0 && compare(x, trimZeros(to)) <= 0;
+}
+
+/** Some projects tag without the artifact's major, e.g. protobuf-java 4.36.2 is tag v36.2. */
+function withoutMajor(v: string): string | undefined {
+  const parts = v.split('.');
+  return parts.length >= 3 && /^\d+$/.test(parts[0]!) ? parts.slice(1).join('.') : undefined;
 }
 
 const sortDesc = (entries: ChangelogEntry[], compare: Compare) =>
@@ -154,6 +187,7 @@ async function releaseEntries(
   from: string,
   to: string,
   compare: Compare,
+  includePre: boolean,
 ): Promise<ReleaseResult> {
   const entries: ChangelogEntry[] = [];
   for (let page = 1; page <= MAX_RELEASE_PAGES; page++) {
@@ -168,7 +202,7 @@ async function releaseEntries(
       const version = normalizeTag(r.tag_name, artifact);
       if (r.draft || !isVersionLike(version)) continue;
       versions.push(version);
-      if (!inRange(version, from, to, compare)) continue;
+      if (!inRange(version, from, to, compare) || (r.prerelease && !includePre)) continue;
       entries.push({
         version,
         title: r.name || undefined,
@@ -242,10 +276,21 @@ export async function getChangelog(
 ): Promise<Changelog> {
   const src = await findSourceRepo(http, dep, to, repo);
   const gh = src.github;
-  if (!gh) return { entries: [], source: src.url };
+  if (!gh) return { entries: [], source: src.notesUrl ?? src.url };
   const releasesUrl = `https://github.com/${gh.owner}/${gh.repo}/releases`;
-  const releases = await releaseEntries(http, gh, dep.artifact, from, to, compare);
-  if (releases.entries.length) return { entries: sortDesc(releases.entries, compare), source: releasesUrl };
-  if (releases.rateLimited) return { entries: [], source: releasesUrl };
-  return (await changelogFileEntries(http, gh, from, to, compare)) ?? { entries: [], source: releasesUrl };
+  const fallback: Changelog = { entries: [], source: src.notesUrl ?? releasesUrl };
+  const includePre = isPrerelease(to);
+
+  const ranges: [string, string][] = [[from, to]];
+  const [shortFrom, shortTo] = [withoutMajor(from), withoutMajor(to)];
+  if (shortFrom && shortTo && compare(shortFrom, shortTo) < 0) ranges.push([shortFrom, shortTo]);
+
+  for (const [a, b] of ranges) {
+    const releases = await releaseEntries(http, gh, dep.artifact, a, b, compare, includePre);
+    if (releases.entries.length) return { entries: sortDesc(releases.entries, compare), source: releasesUrl };
+    if (releases.rateLimited) return fallback;
+    const files = await changelogFileEntries(http, gh, a, b, compare);
+    if (files) return files;
+  }
+  return fallback;
 }
