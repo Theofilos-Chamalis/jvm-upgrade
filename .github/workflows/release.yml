@@ -12,24 +12,24 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
-          node-version: 24
+          node-version: 26
           registry-url: https://registry.npmjs.org
-          cache: npm
-      - run: npm install -g npm@^11.5.1
+      - run: npm install -g npm@latest
       - run: npm ci
       - name: Check tag matches package.json
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
       - run: npm run typecheck
       - run: npm test
+      - run: npm run build
       - name: Publish to npm
         run: |
           if npm view "jvm-upgrade@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1; then
             echo "Version already on npm, skipping publish."
           else
-            npm publish --access public
+            npm publish --access public --ignore-scripts
           fi
       - name: Create GitHub release
         run: |

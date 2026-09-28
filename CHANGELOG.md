@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.1]
+
+This is the first npm release with the 0.3.0 changes (0.3.0 was never published to npm):
+- `-l, --changelog` prints one link per upgrade.
+- `--changelog-latest` prints the release notes of the new version only.
+- `--changelog-diff` prints the release notes of every version between the old and the new one.
+- Release notes are cleaned up and styled for the terminal.
+
+### Changed
+- CI and release workflows use `actions/checkout@v7`, `actions/setup-node@v7` and the latest npm.
+- CI tests on Node.js 22, 24 and 26. Releases are built with Node.js 26.
+- The release job no longer uses the npm cache.
+
 ## [0.3.0]
 
 ### Added
