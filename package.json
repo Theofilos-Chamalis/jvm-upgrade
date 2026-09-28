@@ -1,0 +1,52 @@
+{
+  "name": "jvm-upgrade",
+  "version": "0.1.0",
+  "description": "Find and apply library upgrades in Java, Kotlin and Android projects (Gradle and Maven), with changelogs.",
+  "type": "module",
+  "bin": {
+    "jvm-upgrade": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20.12"
+  },
+  "scripts": {
+    "build": "rm -rf dist && tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
+  },
+  "keywords": [
+    "gradle",
+    "maven",
+    "android",
+    "kotlin",
+    "java",
+    "dependencies",
+    "upgrade",
+    "outdated",
+    "version-catalog",
+    "changelog",
+    "jitpack",
+    "cli"
+  ],
+  "author": "Theofilos Chamalis",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Theofilos-Chamalis/jvm-upgrade.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Theofilos-Chamalis/jvm-upgrade/issues"
+  },
+  "homepage": "https://github.com/Theofilos-Chamalis/jvm-upgrade#readme",
+  "devDependencies": {
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.2"
+  }
+}

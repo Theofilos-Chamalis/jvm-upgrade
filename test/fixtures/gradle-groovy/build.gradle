@@ -1,0 +1,48 @@
+buildscript {
+    ext.kotlin_version = '1.9.24'
+    ext {
+        agp_version = "8.5.0"
+        set('shadowVersion', '8.1.1')
+    }
+    repositories {
+        mavenCentral()
+        maven { setUrl("https://buildscript.example.com") }
+    }
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+        classpath "com.android.tools.build:gradle:${agp_version}"
+    }
+}
+
+plugins {
+    id 'java'
+    id 'io.spring.dependency-management' version '1.1.5'
+    id "com.github.johnrengelman.shadow" version "${shadowVersion}"
+}
+
+allprojects {
+    repositories {
+        mavenCentral()
+        mavenLocal()
+        jcenter()
+        maven { url = uri("https://allprojects.example.com/repo/") }
+    }
+}
+
+def guavaVersion = '33.2.1-jre'
+
+dependencies {
+    implementation 'org.apache.commons:commons-lang3:3.14.0'
+    implementation "com.google.guava:guava:$guavaVersion"
+    implementation group: 'com.fasterxml.jackson.core', name: 'jackson-databind', version: jacksonVersion
+    implementation group: 'org.yaml', name: 'snakeyaml', version: '2.2'
+    implementation enforcedPlatform("org.springframework.boot:spring-boot-dependencies:${springBootVersion}")
+    runtimeOnly 'com.example:native:1.0.0@aar'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs:2.0.4'
+}
+
+publishing {
+    repositories {
+        maven { url 'https://publish.example.com' }
+    }
+}

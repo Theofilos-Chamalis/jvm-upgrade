@@ -1,0 +1,1 @@
+<project><artifactId>ignored</artifactId><dependencies><dependency><groupId>x</groupId><artifactId>y</artifactId><version>1</version></dependency></dependencies></project>

@@ -1,0 +1,11 @@
+pluginManagement {
+    repositories {
+        gradlePluginPortal()
+        maven { url 'https://plugins.example.com/m2' }
+    }
+    plugins {
+        id 'org.springframework.boot' version "${springBootVersion}"
+    }
+}
+rootProject.name = 'groovy'
+include 'core'
