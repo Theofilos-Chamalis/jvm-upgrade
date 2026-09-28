@@ -5,7 +5,7 @@ import { parseArgs, styleText } from 'node:util';
 import { applyEdits, EditConflictError, type Edit } from './apply.js';
 import { getChangelog } from './changelog.js';
 import { ConfigError, loadCredentials, loadUserConfig, projectConfigResolver, splitPatterns } from './config.js';
-import { formatChangelog, renderTable, toJson } from './format.js';
+import { changelogUrl, formatChangelog, formatChangelogHeader, formatChangelogLinks, renderTable, toJson } from './format.js';
 import { clearCache, createHttp, defaultCacheDir } from './http.js';
 import { createProgress } from './progress.js';
 import { buildRows, type Choice, type Row } from './rows.js';
@@ -22,7 +22,9 @@ Find outdated libraries in Gradle and Maven projects and upgrade them.
 Actions
   -u, --upgrade            Write the selected upgrades to the build files
   -i, --interactive        Pick upgrades (and read changelogs) in a terminal UI
-  -l, --changelog          Print the changelog of every selected upgrade
+  -l, --changelog          Print a changelog link for every selected upgrade
+      --changelog-latest   Print the release notes of the new version only
+      --changelog-diff     Print the release notes of every version between old and new
 
 Policy
   -t, --target <level>     Highest jump allowed: major, minor or patch (default: major)
@@ -63,6 +65,8 @@ function parseCli(argv: string[]) {
         upgrade: { type: 'boolean', short: 'u' },
         interactive: { type: 'boolean', short: 'i' },
         changelog: { type: 'boolean', short: 'l' },
+        'changelog-latest': { type: 'boolean' },
+        'changelog-diff': { type: 'boolean' },
         target: { type: 'string', short: 't' },
         cooldown: { type: 'string', short: 'c' },
         'allow-downgrade': { type: 'boolean' },
@@ -215,7 +219,8 @@ export async function main(argv = process.argv.slice(2)): Promise<number> {
       }
     }
 
-    if (flags.changelog && !json) await printChangelogs(http, chosen, showProgress);
+    const changelogMode = flags['changelog-diff'] ? 'diff' : flags['changelog-latest'] ? 'latest' : flags.changelog ? 'links' : undefined;
+    if (changelogMode && !json) await printChangelogs(http, chosen, changelogMode, showProgress);
 
     const writable = [...chosen].filter(([row]) => row.location);
     if (flags.upgrade || flags.interactive) {
@@ -250,21 +255,32 @@ function loadChangelog(http: Http, row: Row, choice: Choice): Promise<Changelog>
   return getChangelog(http, dep, row.current, choice.version, row.repoOf.get(choice.version), compareVersions);
 }
 
-async function printChangelogs(http: Http, chosen: Map<Row, Choice>, showProgress: boolean) {
+const MAX_NOTE_LINES = 40;
+
+async function printChangelogs(http: Http, chosen: Map<Row, Choice>, mode: 'links' | 'latest' | 'diff', showProgress: boolean) {
   const entries = [...chosen];
+  if (!entries.length) return;
   const progress = createProgress('Loading changelogs', process.stderr, showProgress);
   progress.total(entries.length);
   const logs = await Promise.all(
     entries.map(([row, choice]) =>
       loadChangelog(http, row, choice)
-        .catch((e: Error): Changelog => ({ entries: [], source: `could not load: ${e.message}` }))
+        .catch((): Changelog => ({ entries: [] }))
         .finally(() => progress.tick()),
     ),
   );
   progress.done();
+
+  if (mode === 'links') {
+    const links = entries.map(([row, choice], i) => ({ name: row.name, from: row.current, to: choice, url: changelogUrl(logs[i]!) }));
+    process.stdout.write(`\n${formatChangelogLinks(links)}\n`);
+    return;
+  }
   const width = Math.min(process.stdout.columns ?? 100, 120) - 2;
   entries.forEach(([row, choice], i) => {
-    process.stdout.write(`\n${styleText(['bold', 'underline'], `${row.name}  ${row.current} → ${choice.version}`)}\n\n`);
-    process.stdout.write(`${formatChangelog(logs[i]!, width)}\n`);
+    const log = logs[i]!;
+    const shown = mode === 'latest' ? { ...log, entries: log.entries.slice(0, 1) } : log;
+    process.stdout.write(`\n${formatChangelogHeader(row.name, row.current, choice, width)}\n\n`);
+    process.stdout.write(`${formatChangelog(shown, width, { maxLines: MAX_NOTE_LINES })}\n`);
   });
 }

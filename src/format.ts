@@ -51,34 +51,132 @@ export function toJson(rows: Row[], root: string) {
   });
 }
 
-export function formatChangelog(log: Changelog, width: number): string {
+export interface ChangelogOptions {
+  /** Body lines shown per version before it is cut short. */
+  maxLines?: number;
+}
+
+export function formatChangelog(log: Changelog, width: number, opts: ChangelogOptions = {}): string {
   if (!log.entries.length) {
-    return log.source ? `No release notes found here. Read them at:\n${log.source}` : 'No release notes found.';
+    return log.source ? `  No release notes found here. Read them at:\n  ${styleText('cyan', log.source)}` : '  No release notes found.';
   }
   const out: string[] = [];
   for (const entry of log.entries) {
-    const date = entry.date ? styleText('gray', `  ${entry.date.slice(0, 10)}`) : '';
-    out.push(styleText(['bold', 'cyan'], entry.title && entry.title !== entry.version ? `${entry.version}  ${entry.title}` : entry.version) + date);
-    if (entry.url) out.push(styleText('gray', entry.url));
-    out.push('');
-    for (const line of entry.body.replace(/\r/g, '').trim().split('\n')) out.push(...wrap(line, width));
+    const title = entry.title && !isJustVersion(entry.title, entry.version) ? styleText('gray', `  ${entry.title}`) : '';
+    const date = entry.date ? styleText('gray', `  ·  ${entry.date.slice(0, 10)}`) : '';
+    out.push(`  ${styleText(['bold', 'green'], `● ${entry.version}`)}${title}${date}`);
+    if (entry.url) out.push(`    ${styleText('gray', entry.url)}`);
+    const body = renderMarkdown(entry.body, width - 4);
+    const shown = opts.maxLines && body.length > opts.maxLines ? body.slice(0, opts.maxLines) : body;
+    if (shown.length) out.push('', ...shown.map((line) => (line ? `    ${line}` : '')));
+    if (shown.length < body.length) {
+      out.push(styleText('gray', `    … ${body.length - shown.length} more lines${entry.url ? ` at ${entry.url}` : ''}`));
+    }
     out.push('');
   }
-  if (log.source) out.push(styleText('gray', `Source: ${log.source}`));
-  return out.join('\n');
+  if (log.source && log.entries.some((e) => !e.url)) out.push(styleText('gray', `  Source: ${log.source}`));
+  return out.join('\n').trimEnd();
 }
 
-function wrap(line: string, width: number): string[] {
-  if (line.length <= width || width < 20) return [line];
-  const indent = /^\s*([-*+]\s+|\d+\.\s+)?/.exec(line)![0].length;
-  const pad = ' '.repeat(Math.min(indent, 8));
-  const words = line.split(' ');
+export function formatChangelogHeader(name: string, from: string, to: Choice, width: number): string {
+  const title = ` ${name}  ${from} → ${to.version} `;
+  const rule = '━'.repeat(Math.max(3, Math.min(width, 100) - title.length - 3));
+  return `${styleText('gray', '━━')}${styleText('bold', ` ${name}  `)}${from} → ${styleText(['bold', levelColor(to.level)], to.version)} ${styleText('gray', rule)}`;
+}
+
+export interface ChangelogLink {
+  name: string;
+  from: string;
+  to: Choice;
+  url?: string;
+}
+
+export function formatChangelogLinks(links: ChangelogLink[]): string {
+  const nameWidth = Math.max(...links.map((l) => l.name.length));
+  const jumpWidth = Math.max(...links.map((l) => `${l.from} → ${l.to.version}`.length));
+  const lines = links.map((l) => {
+    const jump = `${l.from} → ${l.to.version}`;
+    const colored = `${l.from} → ${styleText(levelColor(l.to.level), l.to.version)}${' '.repeat(jumpWidth - jump.length)}`;
+    return `${l.name.padEnd(nameWidth)}  ${colored}  ${l.url ? styleText('cyan', l.url) : styleText('gray', 'no release notes found')}`;
+  });
+  return [styleText('bold', 'Changelogs'), ...lines].join('\n');
+}
+
+/** Link to the notes of the target version when found, else to the general notes page. */
+export function changelogUrl(log: Changelog): string | undefined {
+  return log.entries[0]?.url ?? log.source;
+}
+
+function isJustVersion(title: string, version: string): boolean {
+  return title.replace(/^v/i, '') === version || !title.replace(new RegExp(version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'), '').replace(/[\sv]/gi, '');
+}
+
+/** Turns release-note markdown into short, styled terminal lines. */
+export function renderMarkdown(markdown: string, width: number): string[] {
+  const text = markdown
+    .replace(/\r/g, '')
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<\/?[a-z][^>]*>/gi, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/\[([^\]]+)\]\((?:https?:[^)\s]+)\)/g, '$1')
+    .replace(/https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/(?:pull|issues)\/(\d+)/g, '#$1')
+    .replace(/\(?https:\/\/github\.com\/[^/\s]+\/[^/\s]+\/commit\/([0-9a-f]{8})[0-9a-f]*\)?/g, '($1)')
+    .replace(/^\s*(?:\*\*|__)([^*_\n]+)(?:\*\*|__):?\s*$/gm, '### $1')
+    .replace(/^\s*[-*+]\s.*@(?:renovate|dependabot)\[bot\].*$\n?/gim, '')
+    .replace(/\*\*|__/g, '');
+
+  const out: string[] = [];
+  let fence = false;
+  let afterHeading = false;
+  for (const raw of text.split('\n')) {
+    const line = raw.trimEnd();
+    const wasHeading: boolean = afterHeading;
+    afterHeading = false;
+    if (/^\s*```/.test(line)) {
+      fence = !fence;
+      continue;
+    }
+    if (fence) {
+      out.push(styleText('cyan', line));
+      continue;
+    }
+    if (/^\s*\[[^\]]+\]:\s*\S+$/.test(line) || /^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) continue;
+    const heading = /^#{1,6}\s+(.*?)\s*#*$/.exec(line);
+    if (heading) {
+      if (out.length && out.at(-1) !== '') out.push('');
+      out.push(styleText(['bold', 'yellow'], heading[1]!));
+      afterHeading = true;
+      continue;
+    }
+    if (!line.trim()) {
+      if (out.length && out.at(-1) !== '' && !wasHeading) out.push('');
+      afterHeading = wasHeading;
+      continue;
+    }
+    const bullet = /^(\s*)[-*+]\s+(.*)$/.exec(line);
+    if (bullet) {
+      const indent = '  '.repeat(Math.min(Math.floor(bullet[1]!.length / 2), 3));
+      out.push(...wrap(bullet[2]!, width - indent.length - 2).map((l, i) => `${indent}${i ? '  ' : '• '}${code(l)}`));
+      continue;
+    }
+    out.push(...wrap(line.trim(), width).map(code));
+  }
+  while (out.at(-1) === '') out.pop();
+  return out;
+}
+
+function code(line: string): string {
+  return line.replace(/`([^`]+)`/g, (_, c: string) => styleText('cyan', c));
+}
+
+function wrap(text: string, width: number): string[] {
+  if (text.length <= width || width < 20) return [text];
   const lines: string[] = [];
   let current = '';
-  for (const word of words) {
+  for (const word of text.split(' ')) {
     if (current && current.length + word.length + 1 > width) {
       lines.push(current);
-      current = pad + word;
+      current = word;
     } else {
       current = current ? `${current} ${word}` : word;
     }

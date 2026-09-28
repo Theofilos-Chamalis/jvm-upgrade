@@ -49,4 +49,4 @@ Open an issue with a small snippet of the build file. That is the fastest way to
 2. Run `npm version x.y.z` (this commits and makes the `vx.y.z` tag).
 3. Run `git push --follow-tags`.
 
-The Release workflow runs the tests, publishes to npm (if that version is not there yet), and makes the GitHub release with the notes from `CHANGELOG.md`.
+The Release workflow runs the tests, publishes to npm with Trusted Publishing (if that version is not there yet), and makes the GitHub release with the notes from `CHANGELOG.md`.

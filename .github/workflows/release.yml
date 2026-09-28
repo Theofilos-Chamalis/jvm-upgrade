@@ -18,6 +18,7 @@ jobs:
           node-version: 24
           registry-url: https://registry.npmjs.org
           cache: npm
+      - run: npm install -g npm@^11.5.1
       - run: npm ci
       - name: Check tag matches package.json
         run: test "v$(node -p 'require("./package.json").version')" = "$GITHUB_REF_NAME"
@@ -28,10 +29,8 @@ jobs:
           if npm view "jvm-upgrade@${GITHUB_REF_NAME#v}" version >/dev/null 2>&1; then
             echo "Version already on npm, skipping publish."
           else
-            npm publish --provenance --access public
+            npm publish --access public
           fi
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
       - name: Create GitHub release
         run: |
           awk -v v="${GITHUB_REF_NAME#v}" '/^## /{p = index($0, "[" v "]") > 0; next} p' CHANGELOG.md > notes.md

@@ -64,3 +64,53 @@ describe('output', () => {
     expect(toJson([row()], '/p')[0]).toMatchObject({ current: '4.9.0', patch: '4.9.3', minor: '4.12.0', major: '5.1.0', selected: '5.1.0', rewritable: true });
   });
 });
+
+describe('changelog output', () => {
+  const plain = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, '');
+
+  it('cleans release-note markdown', async () => {
+    const { renderMarkdown } = await import('../src/format.js');
+    const md = [
+      '<!-- hidden -->',
+      '## What\'s Changed',
+      '',
+      '* Fix `Call` by @a in https://github.com/o/r/pull/12',
+      '* Update x by @renovate[bot] in https://github.com/o/r/pull/13',
+      '  - nested [link](https://example.com)',
+      '**Fixed**',
+      '- Bug (https://github.com/o/r/commit/30780158a07394a22eba3d57527ef32cac795e76)',
+      '[1.0.0]: https://github.com/o/r/releases/tag/1.0.0',
+      '![img](https://x/y.png)',
+    ].join('\n');
+    expect(renderMarkdown(md, 80).map(plain)).toEqual([
+      "What's Changed",
+      '• Fix Call by @a in #12',
+      '  • nested link',
+      '',
+      'Fixed',
+      '• Bug (30780158)',
+    ]);
+  });
+
+  it('wraps long bullets with a hanging indent', async () => {
+    const { renderMarkdown } = await import('../src/format.js');
+    const lines = renderMarkdown(`- ${'word '.repeat(20).trim()}`, 30).map(plain);
+    expect(lines[0]!.startsWith('• ')).toBe(true);
+    expect(lines.slice(1).every((l) => l.startsWith('  ') && l.length <= 30)).toBe(true);
+  });
+
+  it('cuts long notes and lists links', async () => {
+    const { formatChangelog, formatChangelogLinks, changelogUrl } = await import('../src/format.js');
+    const log = { entries: [{ version: '2.0.0', body: Array.from({ length: 50 }, (_, i) => `line ${i}`).join('\n\n'), url: 'https://x/2.0.0' }], source: 'https://x' };
+    const text = plain(formatChangelog(log, 80, { maxLines: 5 }));
+    expect(text).toContain('more lines at https://x/2.0.0');
+    expect(text).not.toContain('Source:');
+    expect(changelogUrl(log)).toBe('https://x/2.0.0');
+    expect(changelogUrl({ entries: [], source: 'https://notes' })).toBe('https://notes');
+    const links = plain(formatChangelogLinks([
+      { name: 'a:b', from: '1.0', to: { level: 'major', version: '2.0' }, url: 'https://x' },
+      { name: 'long:name', from: '1.0', to: { level: 'patch', version: '1.0.1' } },
+    ]));
+    expect(links).toBe('Changelogs\na:b        1.0 → 2.0    https://x\nlong:name  1.0 → 1.0.1  no release notes found');
+  });
+});

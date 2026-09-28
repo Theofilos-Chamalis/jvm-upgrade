@@ -40,12 +40,14 @@ Or run it once with `npx jvm-upgrade`. Needs Node.js 22.13 or newer.
 ## Usage
 
 ```sh
-jvm-upgrade                 # list available upgrades (nothing is changed)
-jvm-upgrade -u              # apply the latest major versions
-jvm-upgrade -u -t minor     # apply the latest minor versions only
-jvm-upgrade -i              # pick versions and read changelogs interactively
-jvm-upgrade -l              # print the changelogs of the selected upgrades
-jvm-upgrade -c 7            # ignore versions published in the last 7 days
+jvm-upgrade                     # list available upgrades (nothing is changed)
+jvm-upgrade -u                  # apply the latest major versions
+jvm-upgrade -u -t minor         # apply the latest minor versions only
+jvm-upgrade -i                  # pick versions and read changelogs interactively
+jvm-upgrade -l                  # print a changelog link for each upgrade
+jvm-upgrade --changelog-latest  # print the release notes of each new version
+jvm-upgrade --changelog-diff    # print the release notes of every version in between
+jvm-upgrade -c 7                # ignore versions published in the last 7 days
 jvm-upgrade path/to/project
 ```
 
@@ -70,7 +72,9 @@ jvm-upgrade path/to/project
 | `[directory]` | `.` | Project root to scan |
 | `-u, --upgrade` | | Write the upgrades to the build files |
 | `-i, --interactive` | | Pick upgrades in a terminal UI |
-| `-l, --changelog` | | Print the changelog of each selected upgrade |
+| `-l, --changelog` | | Print a changelog link for each selected upgrade |
+| `--changelog-latest` | | Print the release notes of the new version only |
+| `--changelog-diff` | | Print the release notes of every version between the old and the new one |
 | `-t, --target <level>` | `major` | Highest jump allowed: `major`, `minor` or `patch` |
 | `-c, --cooldown <days>` | `0` | Skip versions published less than N days ago |
 | `--allow-downgrade` | | With `--cooldown`, roll back versions that are too new |
@@ -131,6 +135,8 @@ For each upgrade, jvm-upgrade finds the source repository:
 - `gradle/gradle` for the Gradle wrapper.
 
 It then reads the GitHub releases between your version and the new one. Prereleases are skipped unless you upgrade to one. If there are no releases, it reads `CHANGELOG.md` (and similar files) and cuts out the right sections. Tags without the major version (protobuf-java `4.36.2` is tag `v36.2`) are matched too.
+
+Notes are cleaned up for the terminal: headings, bullets and code are styled, links and HTML are removed, pull request and commit links become `#123` and short hashes, and Renovate/Dependabot bumps are hidden. Each version shows at most 40 lines, followed by a link to the rest. In the interactive picker (`c`), you see the full notes.
 
 If it finds nothing, it gives you a link: the release notes page for androidx, Google Play services, Firebase and Gradle, or the project's releases page.
 

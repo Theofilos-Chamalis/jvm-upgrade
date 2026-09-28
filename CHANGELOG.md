@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.0]
+
+### Added
+- `--changelog-latest` prints the release notes of the new version only.
+- `--changelog-diff` prints the release notes of every version between the old and the new one.
+
+### Changed
+- `-l, --changelog` now prints one link per upgrade, which keeps the output short.
+- Release notes are easier to read: styled headings, bullets and code, no HTML or markdown noise, short `#123` and commit links, no Renovate/Dependabot bumps, and at most 40 lines per version.
+
 ## [0.2.0]
 
 ### Added
